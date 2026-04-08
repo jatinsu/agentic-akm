@@ -106,8 +106,4 @@ The system generates:
 
 ## Design Philosophy
 
-Based on the AgenticAKM paper, this system treats documentation as a living knowledge graph that evolves through agent interactions rather than static file generation.
-
-## License
-
-MIT
+Based on the [AgenticAKM paper](https://arxiv.org/abs/2602.04445), this system treats documentation as a living knowledge graph that evolves through agent interactions rather than static file generation.
