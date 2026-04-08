@@ -1,4 +1,4 @@
-# Agentic Architecture Knowledge Management
+# Agentic Knowledge Management
 
 An agentic documentation generator tailored for Red Hat OpenShift repositories using knowledge graph architecture.
 
