@@ -1,7 +1,7 @@
 """Agent system."""
 
 from .base import Agent, AgentContext
-from .ingestion import RepositoryScannerAgent, OpenShiftManifestAgent
+from .ingestion import RepositoryScannerAgent, OpenShiftManifestAgent, JiraIngestionAgent
 from .understanding import ServiceInferenceAgent, APIExtractionAgent, DependencyAnalysisAgent
 from .synthesis import ArchitectureDocAgent
 from .validation import ConsistencyValidatorAgent
@@ -11,6 +11,7 @@ __all__ = [
     "AgentContext",
     "RepositoryScannerAgent",
     "OpenShiftManifestAgent",
+    "JiraIngestionAgent",
     "ServiceInferenceAgent",
     "APIExtractionAgent",
     "DependencyAnalysisAgent",

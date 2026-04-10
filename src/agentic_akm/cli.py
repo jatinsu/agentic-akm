@@ -13,6 +13,7 @@ from .agents import (
     AgentContext,
     RepositoryScannerAgent,
     OpenShiftManifestAgent,
+    JiraIngestionAgent,
     ServiceInferenceAgent,
     APIExtractionAgent,
     DependencyAnalysisAgent,
@@ -51,6 +52,22 @@ def main():
         action="store_true",
         help="Skip LLM-based agents (for testing)",
     )
+    parser.add_argument(
+        "--github-repo",
+        type=str,
+        help="GitHub repo to fetch PR titles from (e.g. openshift/installer)",
+    )
+    parser.add_argument(
+        "--jira-server",
+        type=str,
+        default="https://issues.redhat.com",
+        help="JIRA server URL (default: https://issues.redhat.com)",
+    )
+    parser.add_argument(
+        "--github-token",
+        type=str,
+        help="GitHub API token (or set GITHUB_TOKEN env var)",
+    )
 
     args = parser.parse_args()
 
@@ -74,6 +91,7 @@ def main():
     agents = [
         RepositoryScannerAgent(),
         OpenShiftManifestAgent(),
+        JiraIngestionAgent(),
         DependencyAnalysisAgent(),
         ConsistencyValidatorAgent(),
     ]
@@ -98,9 +116,18 @@ def main():
             print(f"Warning: Could not initialize Gemini client: {e}")
             print("Continuing without LLM-based agents")
 
+    github_repo = args.github_repo
+    github_token = args.github_token or os.getenv("GITHUB_TOKEN")
+    jira_server = args.jira_server
+
     context = AgentContext(
         repository_path=str(repo_path),
-        config={},
+        config={
+            "github_repo": github_repo,
+            "github_token": github_token,
+            "jira_server": jira_server,
+            "jira_output_path": str(output_dir / "jira_issues.json"),
+        },
     )
 
     orchestrator = AgentOrchestrator(agents)

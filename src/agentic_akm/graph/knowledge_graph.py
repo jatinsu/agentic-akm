@@ -20,6 +20,7 @@ class NodeType(Enum):
     DOCUMENTATION_ARTIFACT = "DocumentationArtifact"
     CONCEPT = "Concept"
     RISK = "Risk"
+    JIRA_ISSUE = "JiraIssue"
     UNKNOWN = "Unknown"
 
 
@@ -34,6 +35,7 @@ class EdgeType(Enum):
     DOCUMENTS = "documents"
     INFERRED_FROM = "inferred_from"
     VALIDATED_BY = "validated_by"
+    REFERENCES = "references"
 
 
 class KnowledgeGraph:

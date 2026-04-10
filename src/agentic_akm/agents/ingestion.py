@@ -1,9 +1,14 @@
 """Ingestion agents."""
 
 import os
+import re
+import json
 import yaml
+import requests
 from pathlib import Path
-from typing import List
+from typing import List, Dict, Any, Optional
+
+from jira import JIRA, JIRAError
 
 from .base import Agent, AgentContext
 from ..graph import KnowledgeGraph, NodeType, EdgeType
@@ -280,3 +285,156 @@ class OpenShiftManifestAgent(Agent):
                 return True
 
         return False
+
+
+def extract_jira_ids(text: str) -> List[str]:
+    """Extract JIRA issue keys from text (e.g. 'OCPBUGS-82439' from a PR title).
+
+    Matches the pattern used in web-page-summarizer-ai/scrapers/jira_scraper.py.
+    """
+    return re.findall(r"\b[A-Z][A-Z0-9]+-\d+\b", text)
+
+
+class JiraIngestionAgent(Agent):
+    """Fetches GitHub PR titles, extracts JIRA keys, and retrieves JIRA issue details.
+
+    Follows the approach from kenjpais/web-page-summarizer-ai:
+    1. Fetch PR titles from a GitHub repository using the REST API.
+    2. Extract JIRA issue keys from the titles using regex.
+    3. Fetch each JIRA issue's summary and description via the jira library.
+    4. Write results to a JSON file and add nodes to the knowledge graph.
+    """
+
+    def __init__(self):
+        super().__init__("JiraIngestionAgent")
+
+    @property
+    def input_requirements(self) -> List[str]:
+        return ["filesystem"]
+
+    @property
+    def output_types(self) -> List[NodeType]:
+        return [NodeType.JIRA_ISSUE]
+
+    def run(self, context: AgentContext, graph: KnowledgeGraph) -> None:
+        config = context.config
+
+        github_repo = config.get("github_repo")  # e.g. "openshift/installer"
+        jira_server = config.get("jira_server", "https://issues.redhat.com")
+        github_token = config.get("github_token")
+        output_path = config.get("jira_output_path", "./output/jira_issues.json")
+
+        if not github_repo:
+            print(f"[{self.name}] Skipping: no github_repo configured")
+            return
+
+        # --- Step 1: Fetch PR titles from GitHub ---
+        pr_titles = self._fetch_pr_titles(github_repo, github_token)
+        if not pr_titles:
+            print(f"[{self.name}] No PR titles fetched from {github_repo}")
+            return
+
+        print(f"[{self.name}] Fetched {len(pr_titles)} PR titles from {github_repo}")
+
+        # --- Step 2: Extract JIRA keys from PR titles ---
+        jira_key_to_pr = {}
+        for pr in pr_titles:
+            keys = extract_jira_ids(pr["title"])
+            for key in keys:
+                jira_key_to_pr.setdefault(key, []).append(pr)
+
+        unique_keys = list(jira_key_to_pr.keys())
+        if not unique_keys:
+            print(f"[{self.name}] No JIRA keys found in PR titles")
+            return
+
+        print(f"[{self.name}] Found {len(unique_keys)} unique JIRA keys in PR titles")
+
+        # --- Step 3: Fetch JIRA issue details ---
+        jira_issues = self._fetch_jira_issues(unique_keys, jira_server)
+        print(f"[{self.name}] Fetched {len(jira_issues)} JIRA issues")
+
+        # --- Step 4: Write to JSON ---
+        output_file = Path(output_path)
+        output_file.parent.mkdir(parents=True, exist_ok=True)
+
+        results = []
+        for issue in jira_issues:
+            result = {
+                "key": issue["key"],
+                "summary": issue["summary"],
+                "description": issue["description"],
+                "source_prs": [
+                    {"number": pr["number"], "title": pr["title"], "body": pr["body"]}
+                    for pr in jira_key_to_pr.get(issue["key"], [])
+                ],
+            }
+            results.append(result)
+
+        with open(output_file, "w") as f:
+            json.dump(results, f, indent=2)
+
+        print(f"[{self.name}] Wrote {len(results)} issues to {output_file}")
+
+    def _fetch_pr_titles(
+        self, github_repo: str, github_token: Optional[str] = None, max_pages: int = 3
+    ) -> List[Dict[str, Any]]:
+        """Fetch merged PR titles from a GitHub repository using the REST API."""
+        headers = {"Accept": "application/vnd.github.v3+json"}
+        if github_token:
+            headers["Authorization"] = f"Bearer {github_token}"
+
+        pr_list = []
+        for page in range(1, max_pages + 1):
+            url = f"https://api.github.com/repos/{github_repo}/pulls"
+            params = {"state": "closed", "per_page": 100, "page": page}
+
+            try:
+                resp = requests.get(url, headers=headers, params=params, timeout=30)
+                resp.raise_for_status()
+            except requests.RequestException as e:
+                print(f"[{self.name}] GitHub API error on page {page}: {e}")
+                break
+
+            pulls = resp.json()
+            if not pulls:
+                break
+
+            for pr in pulls:
+                if pr.get("merged_at"):
+                    pr_list.append({"number": pr["number"], "title": pr["title"], "body": pr.get("body") or ""})
+
+        return pr_list
+
+    def _fetch_jira_issues(
+        self, jira_keys: List[str], jira_server: str
+    ) -> List[Dict[str, Any]]:
+        """Fetch JIRA issue details using the jira library.
+
+        Follows the approach from web-page-summarizer-ai/clients/jira_client.py
+        and scrapers/jira_scraper.py — connect without auth for public instances,
+        then fetch summary and description for each issue.
+        """
+        try:
+            jira = JIRA(options={"server": jira_server})
+        except JIRAError as e:
+            print(f"[{self.name}] Failed to connect to JIRA server {jira_server}: {e}")
+            return []
+
+        issues = []
+        for key in jira_keys:
+            try:
+                issue = jira.issue(key, fields="summary,description")
+                summary = getattr(issue.fields, "summary", "") or ""
+                description = getattr(issue.fields, "description", "") or ""
+                issues.append({
+                    "key": key,
+                    "summary": summary,
+                    "description": description,
+                })
+            except JIRAError as e:
+                print(f"[{self.name}] Failed to fetch {key}: {e}")
+            except Exception as e:
+                print(f"[{self.name}] Unexpected error fetching {key}: {e}")
+
+        return issues
