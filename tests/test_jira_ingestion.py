@@ -61,6 +61,88 @@ def _make_context(github_repo=None, tmpdir=None):
     )
 
 
+MOCK_PRS = [
+    {
+        "number": 100,
+        "title": "OCPBUGS-82439: [release-4.21] Mount pullsecret manifest to UI container",
+        "body": "Mounts pull secret volume.",
+        "state": "closed",
+        "merged_at": "2024-01-15T10:30:00Z",
+        "head_ref": "fix/OCPBUGS-82439",
+        "base_ref": "master",
+        "user": "dev1",
+        "labels": ["bug"],
+        "jira_keys": ["OCPBUGS-82439"],
+        "files_changed": ["pkg/console/deployment.go"],
+    },
+    {
+        "number": 101,
+        "title": "STOR-456: Fix storage driver",
+        "body": "Fixes CSI driver panic.",
+        "state": "closed",
+        "merged_at": "2024-01-10T14:20:00Z",
+        "head_ref": "fix/STOR-456",
+        "base_ref": "master",
+        "user": "dev2",
+        "labels": ["bug", "storage"],
+        "jira_keys": ["STOR-456"],
+        "files_changed": ["pkg/csi/driver.go"],
+    },
+    {
+        "number": 102,
+        "title": "Update docs, no jira key here",
+        "body": "Doc updates.",
+        "state": "closed",
+        "merged_at": "2024-01-09T08:00:00Z",
+        "head_ref": "docs/update",
+        "base_ref": "master",
+        "user": "dev3",
+        "labels": ["docs"],
+        "jira_keys": [],
+        "files_changed": ["README.md"],
+    },
+]
+
+MOCK_REPO_INFO = {
+    "name": "installer",
+    "full_name": "openshift/installer",
+    "description": "OpenShift installer",
+}
+
+MOCK_JIRA_ISSUES = [
+    {
+        "key": "OCPBUGS-82439",
+        "id": "10001",
+        "summary": "Mount pullsecret manifest to UI container",
+        "description": "The pull secret needs to be mounted into the console container.",
+        "status": "Done",
+        "labels": ["bug"],
+        "created": "2024-01-05T10:00:00Z",
+        "updated": "2024-01-15T10:30:00Z",
+        "assignee": "Console Team",
+        "reporter": "QE",
+        "comments": [
+            {"author": "Tech Lead", "body": "Needs volume mount", "created": "2024-01-06T09:00:00Z"}
+        ],
+        "links": [],
+    },
+    {
+        "key": "STOR-456",
+        "id": "10002",
+        "summary": "Fix storage driver",
+        "description": "Storage driver crashes under high load.",
+        "status": "Done",
+        "labels": ["bug"],
+        "created": "2024-01-03T14:00:00Z",
+        "updated": "2024-01-10T14:20:00Z",
+        "assignee": "Storage Team",
+        "reporter": "Customer Support",
+        "comments": [],
+        "links": [],
+    },
+]
+
+
 class TestJiraIngestionAgentUnit:
     """Unit tests with mocked external calls."""
 
@@ -68,54 +150,35 @@ class TestJiraIngestionAgentUnit:
         agent = JiraIngestionAgent()
         graph = KnowledgeGraph()
         context = _make_context(github_repo=None)
-
-        # Should return without error
         agent.run(context, graph)
 
-    @patch.object(JiraIngestionAgent, "_fetch_pr_titles")
-    def test_skips_when_no_prs(self, mock_fetch_prs):
+    @patch.object(JiraIngestionAgent, "_fetch_repo_info", return_value=MOCK_REPO_INFO)
+    @patch.object(JiraIngestionAgent, "_fetch_prs")
+    def test_skips_when_no_prs(self, mock_fetch_prs, _mock_repo):
         mock_fetch_prs.return_value = []
 
         agent = JiraIngestionAgent()
         graph = KnowledgeGraph()
         context = _make_context(github_repo="openshift/installer")
-
         agent.run(context, graph)
 
-    @patch.object(JiraIngestionAgent, "_fetch_pr_titles")
-    def test_skips_when_no_jira_keys_in_titles(self, mock_fetch_prs):
-        mock_fetch_prs.return_value = [
-            {"number": 1, "title": "Update README"},
-            {"number": 2, "title": "Fix typo in docs"},
-        ]
+    @patch.object(JiraIngestionAgent, "_fetch_repo_info", return_value=MOCK_REPO_INFO)
+    @patch.object(JiraIngestionAgent, "_fetch_prs")
+    def test_skips_when_no_jira_keys_in_titles(self, mock_fetch_prs, _mock_repo):
+        mock_fetch_prs.return_value = [MOCK_PRS[2]]  # PR with no jira key
 
         agent = JiraIngestionAgent()
         graph = KnowledgeGraph()
         context = _make_context(github_repo="openshift/installer")
-
         agent.run(context, graph)
 
     @patch.object(JiraIngestionAgent, "_fetch_jira_issues")
-    @patch.object(JiraIngestionAgent, "_fetch_pr_titles")
-    def test_full_flow_with_mocks(self, mock_fetch_prs, mock_fetch_jira):
-        """End-to-end test: PR titles -> Jira key extraction -> Jira fetch -> JSON."""
-        mock_fetch_prs.return_value = [
-            {"number": 100, "title": "OCPBUGS-82439: [release-4.21] Mount pullsecret manifest to UI container", "body": "Mounts pull secret volume."},
-            {"number": 101, "title": "STOR-456: Fix storage driver", "body": "Fixes CSI driver panic."},
-            {"number": 102, "title": "Update docs, no jira key here", "body": "Doc updates."},
-        ]
-        mock_fetch_jira.return_value = [
-            {
-                "key": "OCPBUGS-82439",
-                "summary": "Mount pullsecret manifest to UI container",
-                "description": "The pull secret needs to be mounted into the console container.",
-            },
-            {
-                "key": "STOR-456",
-                "summary": "Fix storage driver",
-                "description": "Storage driver crashes under high load.",
-            },
-        ]
+    @patch.object(JiraIngestionAgent, "_fetch_repo_info", return_value=MOCK_REPO_INFO)
+    @patch.object(JiraIngestionAgent, "_fetch_prs")
+    def test_full_flow_with_mocks(self, mock_fetch_prs, _mock_repo, mock_fetch_jira):
+        """End-to-end test: PRs -> Jira key extraction -> Jira fetch -> JSON."""
+        mock_fetch_prs.return_value = MOCK_PRS
+        mock_fetch_jira.return_value = MOCK_JIRA_ISSUES
 
         with tempfile.TemporaryDirectory() as tmpdir:
             agent = JiraIngestionAgent()
@@ -123,7 +186,7 @@ class TestJiraIngestionAgentUnit:
             context = _make_context(github_repo="openshift/installer", tmpdir=tmpdir)
             agent.run(context, graph)
 
-            # Verify Jira keys were passed correctly to _fetch_jira_issues
+            # Verify Jira keys were passed correctly
             called_keys = mock_fetch_jira.call_args[0][0]
             assert "OCPBUGS-82439" in called_keys
             assert "STOR-456" in called_keys
@@ -139,30 +202,40 @@ class TestJiraIngestionAgentUnit:
             print(json.dumps(data, indent=2))
             print("--- end ---")
 
-            assert len(data) == 2
-            keys_in_json = {item["key"] for item in data}
-            assert keys_in_json == {"OCPBUGS-82439", "STOR-456"}
+            # Top-level structure
+            assert "github" in data
+            assert "jira" in data
 
-            # Verify source_prs are included with body
-            for item in data:
-                assert "source_prs" in item
-                if item["key"] == "OCPBUGS-82439":
-                    assert item["source_prs"][0]["number"] == 100
-                    assert item["source_prs"][0]["body"] == "Mounts pull secret volume."
-                elif item["key"] == "STOR-456":
-                    assert item["source_prs"][0]["number"] == 101
-                    assert item["source_prs"][0]["body"] == "Fixes CSI driver panic."
+            # GitHub section
+            assert data["github"]["repository"] == MOCK_REPO_INFO
+            assert len(data["github"]["pull_requests"]) == 3
+
+            pr0 = data["github"]["pull_requests"][0]
+            assert pr0["number"] == 100
+            assert pr0["jira_keys"] == ["OCPBUGS-82439"]
+            assert pr0["files_changed"] == ["pkg/console/deployment.go"]
+            assert pr0["user"] == "dev1"
+
+            # Jira section
+            assert data["jira"]["project_key"] == "OCPBUGS"
+            assert len(data["jira"]["issues"]) == 2
+
+            issue0 = data["jira"]["issues"][0]
+            assert issue0["key"] == "OCPBUGS-82439"
+            assert issue0["summary"] == "Mount pullsecret manifest to UI container"
+            assert issue0["status"] == "Done"
+            assert issue0["comments"][0]["author"] == "Tech Lead"
+
+            # Cross-reference: related_prs on jira issues
+            assert issue0["related_prs"][0]["number"] == 100
 
     @patch.object(JiraIngestionAgent, "_fetch_jira_issues")
-    @patch.object(JiraIngestionAgent, "_fetch_pr_titles")
-    def test_json_output_structure(self, mock_fetch_prs, mock_fetch_jira):
-        """Verify the JSON output has the expected schema."""
-        mock_fetch_prs.return_value = [
-            {"number": 1, "title": "ABC-10: some fix", "body": "Fix description."},
-        ]
-        mock_fetch_jira.return_value = [
-            {"key": "ABC-10", "summary": "Some fix", "description": "Details here."},
-        ]
+    @patch.object(JiraIngestionAgent, "_fetch_repo_info", return_value=MOCK_REPO_INFO)
+    @patch.object(JiraIngestionAgent, "_fetch_prs")
+    def test_json_output_structure(self, mock_fetch_prs, _mock_repo, mock_fetch_jira):
+        """Verify the JSON output has the expected top-level schema."""
+        mock_fetch_prs.return_value = [MOCK_PRS[0]]
+        mock_fetch_jira.return_value = [MOCK_JIRA_ISSUES[0]]
 
         with tempfile.TemporaryDirectory() as tmpdir:
             agent = JiraIngestionAgent()
@@ -173,13 +246,25 @@ class TestJiraIngestionAgentUnit:
             with open(os.path.join(tmpdir, "jira_issues.json")) as f:
                 data = json.load(f)
 
-            assert len(data) == 1
-            issue = data[0]
-            assert set(issue.keys()) == {"key", "summary", "description", "source_prs"}
-            assert set(issue["source_prs"][0].keys()) == {"number", "title", "body"}
-            assert issue["key"] == "ABC-10"
-            assert issue["summary"] == "Some fix"
-            assert issue["description"] == "Details here."
+            assert set(data.keys()) == {"github", "jira"}
+            assert set(data["github"].keys()) == {"repository", "pull_requests"}
+            assert set(data["jira"].keys()) == {"project_key", "issues"}
+
+            pr = data["github"]["pull_requests"][0]
+            expected_pr_keys = {
+                "number", "title", "body", "state", "merged_at",
+                "head_ref", "base_ref", "user", "labels",
+                "jira_keys", "files_changed",
+            }
+            assert set(pr.keys()) == expected_pr_keys
+
+            issue = data["jira"]["issues"][0]
+            expected_issue_keys = {
+                "key", "id", "summary", "description", "status",
+                "labels", "created", "updated", "assignee", "reporter",
+                "comments", "links", "related_prs",
+            }
+            assert set(issue.keys()) == expected_issue_keys
 
 
 # ---------------------------------------------------------------------------
@@ -189,13 +274,22 @@ class TestJiraIngestionAgentUnit:
 class TestFetchJiraIssues:
     @patch("src.agentic_akm.agents.ingestion.JIRA")
     def test_fetches_issues(self, mock_jira_class):
-        """Should fetch summary and description for each key."""
+        """Should fetch full issue details for each key."""
         mock_jira = MagicMock()
         mock_jira_class.return_value = mock_jira
 
         mock_issue = MagicMock()
+        mock_issue.id = "10001"
         mock_issue.fields.summary = "Fix the bug"
         mock_issue.fields.description = "Detailed description of the bug."
+        mock_issue.fields.status.name = "Done"
+        mock_issue.fields.labels = ["bug"]
+        mock_issue.fields.created = "2024-01-01T00:00:00Z"
+        mock_issue.fields.updated = "2024-01-02T00:00:00Z"
+        mock_issue.fields.assignee.displayName = "Dev Team"
+        mock_issue.fields.reporter.displayName = "Reporter"
+        mock_issue.fields.comment.comments = []
+        mock_issue.fields.issuelinks = []
         mock_jira.issue.return_value = mock_issue
 
         agent = JiraIngestionAgent()
@@ -203,8 +297,11 @@ class TestFetchJiraIssues:
 
         assert len(results) == 1
         assert results[0]["key"] == "OCPBUGS-123"
+        assert results[0]["id"] == "10001"
         assert results[0]["summary"] == "Fix the bug"
         assert results[0]["description"] == "Detailed description of the bug."
+        assert results[0]["status"] == "Done"
+        assert results[0]["assignee"] == "Dev Team"
 
     @patch("src.agentic_akm.agents.ingestion.JIRA")
     def test_handles_missing_issue(self, mock_jira_class):
@@ -215,8 +312,17 @@ class TestFetchJiraIssues:
         mock_jira_class.return_value = mock_jira
 
         mock_issue_good = MagicMock()
+        mock_issue_good.id = "10002"
         mock_issue_good.fields.summary = "Good issue"
         mock_issue_good.fields.description = "Description"
+        mock_issue_good.fields.status.name = "Open"
+        mock_issue_good.fields.labels = []
+        mock_issue_good.fields.created = "2024-01-01T00:00:00Z"
+        mock_issue_good.fields.updated = "2024-01-01T00:00:00Z"
+        mock_issue_good.fields.assignee = None
+        mock_issue_good.fields.reporter = None
+        mock_issue_good.fields.comment.comments = []
+        mock_issue_good.fields.issuelinks = []
 
         mock_jira.issue.side_effect = [
             JIRAError("Not found"),

@@ -296,13 +296,13 @@ def extract_jira_ids(text: str) -> List[str]:
 
 
 class JiraIngestionAgent(Agent):
-    """Fetches GitHub PR titles, extracts JIRA keys, and retrieves JIRA issue details.
+    """Fetches GitHub PRs, extracts JIRA keys, and retrieves JIRA issue details.
 
     Follows the approach from kenjpais/web-page-summarizer-ai:
-    1. Fetch PR titles from a GitHub repository using the REST API.
-    2. Extract JIRA issue keys from the titles using regex.
-    3. Fetch each JIRA issue's summary and description via the jira library.
-    4. Write results to a JSON file and add nodes to the knowledge graph.
+    1. Fetch merged PRs from a GitHub repository using the REST API.
+    2. Extract JIRA issue keys from the PR titles using regex.
+    3. Fetch each JIRA issue's details via the jira library.
+    4. Write combined github + jira data to a JSON file.
     """
 
     def __init__(self):
@@ -328,58 +328,100 @@ class JiraIngestionAgent(Agent):
             print(f"[{self.name}] Skipping: no github_repo configured")
             return
 
-        # --- Step 1: Fetch PR titles from GitHub ---
-        pr_titles = self._fetch_pr_titles(github_repo, github_token)
-        if not pr_titles:
-            print(f"[{self.name}] No PR titles fetched from {github_repo}")
+        # --- Step 1: Fetch repo info and merged PRs from GitHub ---
+        repo_info = self._fetch_repo_info(github_repo, github_token)
+        prs = self._fetch_prs(github_repo, github_token)
+        if not prs:
+            print(f"[{self.name}] No merged PRs fetched from {github_repo}")
             return
 
-        print(f"[{self.name}] Fetched {len(pr_titles)} PR titles from {github_repo}")
+        print(f"[{self.name}] Fetched {len(prs)} merged PRs from {github_repo}")
 
         # --- Step 2: Extract JIRA keys from PR titles ---
-        jira_key_to_pr = {}
-        for pr in pr_titles:
+        jira_key_to_prs: Dict[str, List[Dict[str, Any]]] = {}
+        for pr in prs:
             keys = extract_jira_ids(pr["title"])
+            pr["jira_keys"] = keys
             for key in keys:
-                jira_key_to_pr.setdefault(key, []).append(pr)
+                jira_key_to_prs.setdefault(key, []).append(pr)
 
-        unique_keys = list(jira_key_to_pr.keys())
+        unique_keys = list(jira_key_to_prs.keys())
         if not unique_keys:
             print(f"[{self.name}] No JIRA keys found in PR titles")
             return
 
         print(f"[{self.name}] Found {len(unique_keys)} unique JIRA keys in PR titles")
 
+        # Derive project key from the first jira key (e.g. "MCO-445" -> "MCO")
+        project_key = unique_keys[0].rsplit("-", 1)[0]
+
         # --- Step 3: Fetch JIRA issue details ---
         jira_issues = self._fetch_jira_issues(unique_keys, jira_server)
         print(f"[{self.name}] Fetched {len(jira_issues)} JIRA issues")
 
-        # --- Step 4: Write to JSON ---
+        # --- Step 4: Cross-reference and build output ---
+        # Attach related_prs to each jira issue
+        for issue in jira_issues:
+            related = jira_key_to_prs.get(issue["key"], [])
+            issue["related_prs"] = [
+                {
+                    "number": pr["number"],
+                    "title": pr["title"],
+                    "state": pr["state"],
+                    "merged_at": pr["merged_at"],
+                }
+                for pr in related
+            ]
+
+        # --- Step 5: Write to JSON ---
         output_file = Path(output_path)
         output_file.parent.mkdir(parents=True, exist_ok=True)
 
-        results = []
-        for issue in jira_issues:
-            result = {
-                "key": issue["key"],
-                "summary": issue["summary"],
-                "description": issue["description"],
-                "source_prs": [
-                    {"number": pr["number"], "title": pr["title"], "body": pr["body"]}
-                    for pr in jira_key_to_pr.get(issue["key"], [])
-                ],
-            }
-            results.append(result)
+        result = {
+            "github": {
+                "repository": repo_info,
+                "pull_requests": prs,
+            },
+            "jira": {
+                "project_key": project_key,
+                "issues": jira_issues,
+            },
+        }
 
         with open(output_file, "w") as f:
-            json.dump(results, f, indent=2)
+            json.dump(result, f, indent=2)
 
-        print(f"[{self.name}] Wrote {len(results)} issues to {output_file}")
+        print(f"[{self.name}] Wrote output to {output_file}")
 
-    def _fetch_pr_titles(
+    def _fetch_repo_info(
+        self, github_repo: str, github_token: Optional[str] = None
+    ) -> Dict[str, str]:
+        """Fetch repository metadata from GitHub."""
+        headers = {"Accept": "application/vnd.github.v3+json"}
+        if github_token:
+            headers["Authorization"] = f"Bearer {github_token}"
+
+        try:
+            resp = requests.get(
+                f"https://api.github.com/repos/{github_repo}",
+                headers=headers, timeout=30,
+            )
+            resp.raise_for_status()
+            data = resp.json()
+            return {
+                "name": data.get("name", ""),
+                "full_name": data.get("full_name", ""),
+                "description": data.get("description") or "",
+            }
+        except requests.RequestException as e:
+            print(f"[{self.name}] Failed to fetch repo info: {e}")
+            owner, name = github_repo.split("/", 1)
+            return {"name": name, "full_name": github_repo, "description": ""}
+
+    def _fetch_prs(
         self, github_repo: str, github_token: Optional[str] = None, max_pages: int = 3
     ) -> List[Dict[str, Any]]:
-        """Fetch merged PR titles from a GitHub repository using the REST API."""
+        """Fetch merged PRs with full details from a GitHub repository."""
         headers = {"Accept": "application/vnd.github.v3+json"}
         if github_token:
             headers["Authorization"] = f"Bearer {github_token}"
@@ -401,10 +443,40 @@ class JiraIngestionAgent(Agent):
                 break
 
             for pr in pulls:
-                if pr.get("merged_at"):
-                    pr_list.append({"number": pr["number"], "title": pr["title"], "body": pr.get("body") or ""})
+                if not pr.get("merged_at"):
+                    continue
+
+                files = self._fetch_pr_files(github_repo, pr["number"], headers)
+
+                pr_list.append({
+                    "number": pr["number"],
+                    "title": pr["title"],
+                    "body": pr.get("body") or "",
+                    "state": pr.get("state", ""),
+                    "merged_at": pr["merged_at"],
+                    "head_ref": pr.get("head", {}).get("ref", ""),
+                    "base_ref": pr.get("base", {}).get("ref", ""),
+                    "user": pr.get("user", {}).get("login", ""),
+                    "labels": [label["name"] for label in pr.get("labels", [])],
+                    "jira_keys": extract_jira_ids(pr["title"]),
+                    "files_changed": files,
+                })
 
         return pr_list
+
+    def _fetch_pr_files(
+        self, github_repo: str, pr_number: int, headers: Dict[str, str]
+    ) -> List[str]:
+        """Fetch the list of files changed in a PR."""
+        try:
+            resp = requests.get(
+                f"https://api.github.com/repos/{github_repo}/pulls/{pr_number}/files",
+                headers=headers, timeout=30,
+            )
+            resp.raise_for_status()
+            return [f["filename"] for f in resp.json()]
+        except requests.RequestException:
+            return []
 
     def _fetch_jira_issues(
         self, jira_keys: List[str], jira_server: str
@@ -412,8 +484,7 @@ class JiraIngestionAgent(Agent):
         """Fetch JIRA issue details using the jira library.
 
         Follows the approach from web-page-summarizer-ai/clients/jira_client.py
-        and scrapers/jira_scraper.py — connect without auth for public instances,
-        then fetch summary and description for each issue.
+        and scrapers/jira_scraper.py — connect without auth for public instances.
         """
         try:
             jira = JIRA(options={"server": jira_server})
@@ -424,13 +495,51 @@ class JiraIngestionAgent(Agent):
         issues = []
         for key in jira_keys:
             try:
-                issue = jira.issue(key, fields="summary,description")
-                summary = getattr(issue.fields, "summary", "") or ""
-                description = getattr(issue.fields, "description", "") or ""
+                issue = jira.issue(
+                    key,
+                    fields="summary,description,status,labels,created,updated,"
+                           "assignee,reporter,comment,issuelinks",
+                )
+                fields = issue.fields
+
+                # Comments
+                comments = []
+                raw_comments = getattr(fields, "comment", None)
+                if raw_comments:
+                    for c in getattr(raw_comments, "comments", []):
+                        comments.append({
+                            "author": getattr(c.author, "displayName", "") if hasattr(c, "author") else "",
+                            "body": getattr(c, "body", "") or "",
+                            "created": getattr(c, "created", "") or "",
+                        })
+
+                # Issue links
+                links = []
+                for link in getattr(fields, "issuelinks", []) or []:
+                    link_entry = {"type": getattr(link.type, "name", "")}
+                    if hasattr(link, "inwardIssue"):
+                        link_entry["inward_key"] = link.inwardIssue.key
+                    if hasattr(link, "outwardIssue"):
+                        link_entry["outward_key"] = link.outwardIssue.key
+                    links.append(link_entry)
+
+                assignee = getattr(fields, "assignee", None)
+                reporter = getattr(fields, "reporter", None)
+                status = getattr(fields, "status", None)
+
                 issues.append({
                     "key": key,
-                    "summary": summary,
-                    "description": description,
+                    "id": issue.id,
+                    "summary": getattr(fields, "summary", "") or "",
+                    "description": getattr(fields, "description", "") or "",
+                    "status": getattr(status, "name", "") if status else "",
+                    "labels": list(getattr(fields, "labels", []) or []),
+                    "created": getattr(fields, "created", "") or "",
+                    "updated": getattr(fields, "updated", "") or "",
+                    "assignee": getattr(assignee, "displayName", "") if assignee else "",
+                    "reporter": getattr(reporter, "displayName", "") if reporter else "",
+                    "comments": comments,
+                    "links": links,
                 })
             except JIRAError as e:
                 print(f"[{self.name}] Failed to fetch {key}: {e}")
