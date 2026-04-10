@@ -60,8 +60,8 @@ def main():
     parser.add_argument(
         "--jira-server",
         type=str,
-        default="https://issues.redhat.com",
-        help="JIRA server URL (default: https://issues.redhat.com)",
+        default="https://redhat.atlassian.net",
+        help="JIRA server URL (default: https://redhat.atlassian.net)",
     )
     parser.add_argument(
         "--github-token",

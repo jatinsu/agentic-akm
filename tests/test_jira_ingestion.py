@@ -55,7 +55,7 @@ def _make_context(github_repo=None, tmpdir=None):
         config={
             "github_repo": github_repo,
             "github_token": None,
-            "jira_server": "https://issues.redhat.com",
+            "jira_server": "https://redhat.atlassian.net",
             "jira_output_path": os.path.join(tmpdir or "/tmp", "jira_issues.json"),
         },
     )
@@ -199,7 +199,7 @@ class TestFetchJiraIssues:
         mock_jira.issue.return_value = mock_issue
 
         agent = JiraIngestionAgent()
-        results = agent._fetch_jira_issues(["OCPBUGS-123"], "https://issues.redhat.com")
+        results = agent._fetch_jira_issues(["OCPBUGS-123"], "https://redhat.atlassian.net")
 
         assert len(results) == 1
         assert results[0]["key"] == "OCPBUGS-123"
@@ -225,7 +225,7 @@ class TestFetchJiraIssues:
 
         agent = JiraIngestionAgent()
         results = agent._fetch_jira_issues(
-            ["BAD-999", "GOOD-1"], "https://issues.redhat.com"
+            ["BAD-999", "GOOD-1"], "https://redhat.atlassian.net"
         )
 
         assert len(results) == 1

@@ -320,7 +320,7 @@ class JiraIngestionAgent(Agent):
         config = context.config
 
         github_repo = config.get("github_repo")  # e.g. "openshift/installer"
-        jira_server = config.get("jira_server", "https://issues.redhat.com")
+        jira_server = config.get("jira_server", "https://redhat.atlassian.net")
         github_token = config.get("github_token")
         output_path = config.get("jira_output_path", "./output/jira_issues.json")
 

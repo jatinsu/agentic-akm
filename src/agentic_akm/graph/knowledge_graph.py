@@ -35,7 +35,6 @@ class EdgeType(Enum):
     DOCUMENTS = "documents"
     INFERRED_FROM = "inferred_from"
     VALIDATED_BY = "validated_by"
-    REFERENCES = "references"
 
 
 class KnowledgeGraph:
