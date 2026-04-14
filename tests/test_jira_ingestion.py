@@ -264,25 +264,70 @@ class TestFetchJiraIssues:
         assert results["ABC-1"]["comments"] == ["verified before merge"]
 
     @patch("src.agentic_akm.agents.ingestion.JIRA")
-    def test_includes_epic_key_when_present(self, mock_jira_class):
-        """Should include epic_key when epic link field exists."""
+    def test_follows_epic_link(self, mock_jira_class):
+        """Should fetch the linked epic and include both in the output."""
         mock_jira = MagicMock()
         mock_jira_class.return_value = mock_jira
         mock_jira.fields.return_value = [
             {"id": "customfield_12345", "name": "Epic Link"},
         ]
 
-        mock_issue = MagicMock()
-        mock_issue.fields.summary = "Child issue"
-        mock_issue.fields.description = "Desc"
-        mock_issue.fields.comment.comments = []
-        mock_issue.fields.customfield_12345 = "EPIC-100"
-        mock_jira.issue.return_value = mock_issue
+        # Child issue links to EPIC-100
+        mock_child = MagicMock()
+        mock_child.fields.summary = "Child issue"
+        mock_child.fields.description = "Child desc"
+        mock_child.fields.comment.comments = []
+        mock_child.fields.customfield_12345 = "EPIC-100"
+
+        # Epic issue (no further epic link)
+        mock_epic = MagicMock()
+        mock_epic.fields.summary = "The epic"
+        mock_epic.fields.description = "Epic desc"
+        mock_epic.fields.comment.comments = []
+        mock_epic.fields.customfield_12345 = None
+
+        mock_jira.issue.side_effect = [mock_child, mock_epic]
 
         agent = JiraIngestionAgent()
         results = agent._fetch_jira_issues(["CHILD-1"], "https://redhat.atlassian.net")
 
+        # Both child and epic should appear in results
+        assert "CHILD-1" in results
         assert results["CHILD-1"]["epic_key"] == "EPIC-100"
+        assert "EPIC-100" in results
+        assert results["EPIC-100"]["summary"] == "The epic"
+
+    @patch("src.agentic_akm.agents.ingestion.JIRA")
+    def test_deduplicates_epic_already_in_input(self, mock_jira_class):
+        """Should not fetch the same issue twice when epic is already in the input list."""
+        mock_jira = MagicMock()
+        mock_jira_class.return_value = mock_jira
+        mock_jira.fields.return_value = [
+            {"id": "customfield_12345", "name": "Epic Link"},
+        ]
+
+        mock_child = MagicMock()
+        mock_child.fields.summary = "Child issue"
+        mock_child.fields.description = "Child desc"
+        mock_child.fields.comment.comments = []
+        mock_child.fields.customfield_12345 = "EPIC-100"
+
+        mock_epic = MagicMock()
+        mock_epic.fields.summary = "The epic"
+        mock_epic.fields.description = "Epic desc"
+        mock_epic.fields.comment.comments = []
+        mock_epic.fields.customfield_12345 = None
+
+        mock_jira.issue.side_effect = [mock_child, mock_epic]
+
+        agent = JiraIngestionAgent()
+        # Both keys provided upfront — epic should only be fetched once
+        results = agent._fetch_jira_issues(
+            ["CHILD-1", "EPIC-100"], "https://redhat.atlassian.net"
+        )
+
+        assert len(results) == 2
+        assert mock_jira.issue.call_count == 2
 
     @patch("src.agentic_akm.agents.ingestion.JIRA")
     def test_handles_missing_issue(self, mock_jira_class):

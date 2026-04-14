@@ -289,7 +289,7 @@ class OpenShiftManifestAgent(Agent):
 def extract_jira_ids(text: str) -> List[str]:
     """Extract JIRA issue keys from text (e.g. 'OCPBUGS-82439' from a PR title).
 
-    Matches the pattern used in web-page-summarizer-ai/scrapers/jira_scraper.py.
+    Matches the pattern used in kenjpais/web-page-summarizer-ai.
     """
     return re.findall(r"\b[A-Z][A-Z0-9]+-\d+\b", text)
 
@@ -380,7 +380,7 @@ class JiraIngestionAgent(Agent):
         """Fetch JIRA issue details and return as a dict keyed by issue key.
 
         Each value contains summary, description, comments (list of strings),
-        and epic_key. Follows the approach from web-page-summarizer-ai.
+        and epic_key. Follows the approach from kenjpais/web-page-summarizer-ai 
         """
         try:
             jira = JIRA(options={"server": jira_server})
@@ -399,7 +399,15 @@ class JiraIngestionAgent(Agent):
             pass
 
         issues: Dict[str, Dict[str, Any]] = {}
-        for key in jira_keys:
+        queue = list(jira_keys)
+        visited: set = set()
+
+        while queue:
+            key = queue.pop(0)
+            if key in visited:
+                continue
+            visited.add(key)
+
             try:
                 fields_to_fetch = "summary,description,comment"
                 if epic_link_field_id:
@@ -423,11 +431,13 @@ class JiraIngestionAgent(Agent):
                     if comment_bodies:
                         entry["comments"] = comment_bodies
 
-                # Epic key
+                # Epic key — follow the link and queue the epic for fetching
                 if epic_link_field_id:
                     epic_key = getattr(fields, epic_link_field_id, None)
                     if epic_key:
                         entry["epic_key"] = epic_key
+                        if epic_key not in visited:
+                            queue.append(epic_key)
 
                 issues[key] = entry
             except JIRAError as e:
