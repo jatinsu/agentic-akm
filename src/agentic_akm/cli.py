@@ -53,20 +53,15 @@ def main():
         help="Skip LLM-based agents (for testing)",
     )
     parser.add_argument(
-        "--github-repo",
+        "--github-json",
         type=str,
-        help="GitHub repo to fetch PR titles from (e.g. openshift/installer)",
+        help="Path to github.json file (input for Jira ingestion)",
     )
     parser.add_argument(
         "--jira-server",
         type=str,
         default="https://redhat.atlassian.net",
         help="JIRA server URL (default: https://redhat.atlassian.net)",
-    )
-    parser.add_argument(
-        "--github-token",
-        type=str,
-        help="GitHub API token (or set GITHUB_TOKEN env var)",
     )
 
     args = parser.parse_args()
@@ -116,17 +111,15 @@ def main():
             print(f"Warning: Could not initialize Gemini client: {e}")
             print("Continuing without LLM-based agents")
 
-    github_repo = args.github_repo
-    github_token = args.github_token or os.getenv("GITHUB_TOKEN")
+    github_json_path = args.github_json
     jira_server = args.jira_server
 
     context = AgentContext(
         repository_path=str(repo_path),
         config={
-            "github_repo": github_repo,
-            "github_token": github_token,
+            "github_json_path": github_json_path,
             "jira_server": jira_server,
-            "jira_output_path": str(output_dir / "jira_issues.json"),
+            "jira_output_path": str(output_dir / "jira.json"),
         },
     )
 
